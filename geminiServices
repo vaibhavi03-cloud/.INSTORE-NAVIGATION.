@@ -1,0 +1,130 @@
+import { GoogleGenAI, Type } from "@google/genai";
+// FIX: Import the ShoppingListItem type to resolve the TypeScript error.
+import { Product, StoreSection, ShoppingListItem } from "../types";
+
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+export const getProductDetails = async (productName: string, sections: StoreSection[]): Promise<{ sectionId: string; price: number } | null> => {
+  if (!productName || sections.length === 0) return null;
+  
+  const sectionNames = sections.map(s => s.name).join(', ');
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `Given the following store sections: ${sectionNames}. In which section would I find "${productName}"? Also provide a realistic price in INR. Respond with a JSON object containing "sectionName" (exact match from the list) and "price".`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            sectionName: {
+              type: Type.STRING,
+              description: "The name of the section where the product is found."
+            },
+            price: {
+              type: Type.NUMBER,
+              description: "The estimated price of the product in INR."
+            }
+          },
+          required: ['sectionName', 'price']
+        }
+      }
+    });
+    const result: { sectionName: string, price: number } = JSON.parse(response.text.trim());
+    const foundSection = sections.find(s => s.name.toLowerCase() === result.sectionName.toLowerCase());
+    
+    if (foundSection) {
+      return { sectionId: foundSection.id, price: result.price };
+    }
+    return null;
+
+  } catch (error) {
+    console.error("Error finding product details:", error);
+    return null;
+  }
+};
+
+export const generateProductList = async (sections: StoreSection[]): Promise<Product[]> => {
+    if (sections.length === 0) return [];
+    const sectionNames = sections.map(s => s.name).filter(name => !["Main Entrance", "Exit", "Men's Washroom", "Women's Washroom"].includes(name)).join(', ');
+  
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Generate a list of 50 common grocery products found in these store sections: ${sectionNames}. For each product, provide its name and a realistic price in INR.`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              products: {
+                type: Type.ARRAY,
+                description: "A list of products with names and prices.",
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                      name: { type: Type.STRING },
+                      price: { type: Type.NUMBER }
+                  },
+                  required: ['name', 'price']
+                }
+              }
+            },
+            required: ['products']
+          },
+        },
+      });
+  
+      const jsonString = response.text.trim();
+      const result: { products: Product[] } = JSON.parse(jsonString);
+      return result.products.sort((a, b) => a.name.localeCompare(b.name));
+    } catch (error) {
+      console.error("Error generating product list:", error);
+      return [
+        { name: "Apples", price: 200 }, { name: "Milk", price: 60 }, { name: "Bread", price: 50 },
+        { name: "Eggs", price: 70 }, { name: "Cheese", price: 450 }, { name: "Chicken Breast", price: 500 },
+        { name: "Shampoo", price: 300 }, { name: "Dog Food", price: 1200 }, { name: "Soda", price: 40 }
+      ].sort((a, b) => a.name.localeCompare(b.name));
+    }
+  };
+
+
+export const getOptimalRoute = async (shoppingList: ShoppingListItem[], sections: StoreSection[]): Promise<string[]> => {
+  if (shoppingList.length === 0) return [];
+  
+  const relevantSectionIds = [...new Set(shoppingList.map(item => item.sectionId))];
+  const relevantSections = sections.filter(s => relevantSectionIds.includes(s.id));
+  const sectionNames = relevantSections.map(s => s.name).join(', ');
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `I need to visit these sections in a store: ${sectionNames}. Starting from the "Main Entrance", what is the most efficient order to visit them? Return a JSON array of the section IDs in the optimal order. The available sections are: ${JSON.stringify(sections.map(s=>({id:s.id, name:s.name})))}.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.STRING,
+            description: "The ID of the store section."
+          },
+        },
+      },
+    });
+
+    const jsonString = response.text.trim();
+    const routeIds: string[] = JSON.parse(jsonString);
+    
+    // Ensure "main-entrance" is the start if not already present
+    if (routeIds[0] !== 'main-entrance') {
+        return ['main-entrance', ...routeIds];
+    }
+    return routeIds;
+
+  } catch (error) {
+    console.error("Error getting optimal route:", error);
+    // Fallback to a simple, non-optimized list
+    return ['main-entrance', ...relevantSectionIds];
+  }
+};
