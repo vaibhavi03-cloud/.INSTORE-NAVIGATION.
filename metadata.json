@@ -1,0 +1,7 @@
+{
+  "name": "In-Store Navigation System",
+  "description": "An AI-powered in-store navigation assistant that helps shoppers locate items and plots the most efficient route through the store.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
